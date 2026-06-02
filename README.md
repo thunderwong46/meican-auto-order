@@ -32,8 +32,16 @@ Create a private GitHub repository, then add these repository secrets:
 
 - `MEICAN_USERNAME`: your Meican login email.
 - `MEICAN_PASSWORD`: your Meican password.
+- `FEISHU_WEBHOOK_URL`: optional Feishu custom bot webhook URL for completion notifications.
+- `FEISHU_SECRET`: optional Feishu custom bot signing secret, if signing is enabled.
 
 Do not put the password directly in the repository.
+
+## Feishu Notification
+
+When `FEISHU_WEBHOOK_URL` is set, the workflow sends a text message after ordering finishes. The message lists each meal's date, status, restaurant, dish, price, pickup location, and order id when available.
+
+If Feishu bot signing is enabled, also set `FEISHU_SECRET`.
 
 ## Manual Run
 

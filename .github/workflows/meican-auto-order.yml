@@ -41,6 +41,8 @@ jobs:
         env:
           MEICAN_USERNAME: ${{ secrets.MEICAN_USERNAME }}
           MEICAN_PASSWORD: ${{ secrets.MEICAN_PASSWORD }}
+          FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
+          FEISHU_SECRET: ${{ secrets.FEISHU_SECRET }}
           DRY_RUN: ${{ inputs.dry_run || 'false' }}
           TARGET_DATE: ${{ inputs.target_date }}
           DEFAULT_PICKUP_LOCATION: "汇金A座62楼"

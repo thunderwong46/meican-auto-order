@@ -1,3 +1,4 @@
+import { createHmac } from "node:crypto";
 import { readFileSync } from "node:fs";
 
 const RULES = loadRules();
@@ -8,6 +9,8 @@ const CONFIG = {
   defaultPickupLocation: process.env.DEFAULT_PICKUP_LOCATION || RULES.defaultPickupLocation || "汇金A座62楼",
   dryRun: (process.env.DRY_RUN || "false").toLowerCase() === "true",
   targetDateOverride: process.env.TARGET_DATE || "",
+  feishuWebhookUrl: process.env.FEISHU_WEBHOOK_URL || "",
+  feishuSecret: process.env.FEISHU_SECRET || "",
   clientId: "Xqr8w0Uk4ciodqfPwjhav5rdxTaYepD",
   clientSecret: "vD11O6xI9bG3kqYRu9OyPAHkRGxLh4E",
 };
@@ -26,8 +29,9 @@ const MEAL_TITLE_PATTERNS = {
 
 let token = null;
 
-main().catch((error) => {
+main().catch(async (error) => {
   console.error(`Failed: ${error.message}`);
+  await notifySafely(formatFailureMessage(error));
   process.exitCode = 1;
 });
 
@@ -58,7 +62,7 @@ async function main() {
 
   for (const plan of orderPlans) {
     if (!calendarItemsByDate.has(plan.targetDate)) {
-      calendarItemsByDate.set(plan.targetDate, await getCalendarItems(plan.targetDate));
+      calendarItemsByDate.set(plan.targetDate, await getCalendarItems(plan.targetDate, plan.targetDate, true));
     }
 
     const result = await handleMealPlan(calendarItemsByDate.get(plan.targetDate), plan, usedDishNames);
@@ -66,6 +70,7 @@ async function main() {
   }
 
   console.log(JSON.stringify(results, null, 2));
+  await notifySafely(formatSuccessMessage(onlineDate, orderPlans, results));
 }
 
 function mustEnv(name) {
@@ -289,7 +294,13 @@ async function handleMealPlan(calendarItems, plan, usedDishNames) {
   }
 
   if (calendarItem.status === "ORDER") {
-    return { ...baseResult, status: "EXISTS", title: calendarItem.title };
+    const existingDishes = extractDishNames(calendarItem);
+    return {
+      ...baseResult,
+      status: "EXISTS",
+      title: calendarItem.title,
+      dish: existingDishes.join(", ") || undefined,
+    };
   }
 
   if (calendarItem.status && calendarItem.status !== "AVAILABLE") {
@@ -452,6 +463,90 @@ async function api(path, options = {}) {
   }
 
   return data;
+}
+
+async function notifySafely(text) {
+  if (!CONFIG.feishuWebhookUrl) return;
+
+  try {
+    await sendFeishuText(text);
+    console.log("Feishu notification sent.");
+  } catch (error) {
+    console.warn(`Feishu notification failed: ${error.message}`);
+  }
+}
+
+async function sendFeishuText(text) {
+  const payload = {
+    msg_type: "text",
+    content: { text },
+  };
+
+  if (CONFIG.feishuSecret) {
+    const timestamp = String(Math.floor(Date.now() / 1000));
+    payload.timestamp = timestamp;
+    payload.sign = createHmac("sha256", `${timestamp}\n${CONFIG.feishuSecret}`).update("").digest("base64");
+  }
+
+  const response = await fetch(CONFIG.feishuWebhookUrl, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+
+  const textBody = await response.text();
+  let data;
+  try {
+    data = JSON.parse(textBody);
+  } catch {
+    data = { raw: textBody };
+  }
+
+  const code = data.code ?? data.StatusCode ?? 0;
+  if (!response.ok || code !== 0) {
+    throw new Error(data.msg || data.StatusMessage || textBody.slice(0, 200));
+  }
+}
+
+function formatSuccessMessage(onlineDate, orderPlans, results) {
+  const lines = [
+    "美餐点餐完成",
+    `执行日期：${onlineDate.date} ${onlineDate.weekdayLabel}`,
+    `目标日期：${[...new Set(orderPlans.map((plan) => plan.targetDate))].join("、")}`,
+    CONFIG.dryRun ? "模式：预览，未实际下单" : "模式：已自动处理",
+    "",
+    "点餐结果：",
+  ];
+
+  for (const result of results) {
+    lines.push(formatResultLine(result));
+  }
+
+  return lines.join("\n");
+}
+
+function formatFailureMessage(error) {
+  return ["美餐点餐失败", `原因：${error.message}`].join("\n");
+}
+
+function formatResultLine(result) {
+  const statusText = {
+    ORDERED: "已下单",
+    EXISTS: "已有订单",
+    DRY_RUN: "预览可点",
+    SKIPPED: "已跳过",
+  }[result.status] || result.status;
+
+  const parts = [`- ${result.targetDate} ${result.meal}：${statusText}`];
+
+  if (result.restaurant) parts.push(`餐厅：${result.restaurant}`);
+  if (result.dish) parts.push(`菜品：${result.dish}`);
+  if (result.price) parts.push(`价格：${result.price}`);
+  if (result.pickup) parts.push(`取餐点：${result.pickup}`);
+  if (result.orderUniqueId) parts.push(`订单号：${result.orderUniqueId}`);
+  if (result.reason) parts.push(`原因：${result.reason}`);
+
+  return parts.join(" | ");
 }
 
 function formatShanghai(timestamp) {
