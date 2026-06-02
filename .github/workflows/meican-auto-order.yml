@@ -18,6 +18,14 @@ on:
         description: "Optional target date, YYYY-MM-DD"
         required: false
         type: string
+      notify_test_only:
+        description: "Send a Feishu test notification only"
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
 
 jobs:
   order:
@@ -45,5 +53,6 @@ jobs:
           FEISHU_SECRET: ${{ secrets.FEISHU_SECRET }}
           DRY_RUN: ${{ inputs.dry_run || 'false' }}
           TARGET_DATE: ${{ inputs.target_date }}
+          NOTIFY_TEST_ONLY: ${{ inputs.notify_test_only || 'false' }}
           DEFAULT_PICKUP_LOCATION: "汇金A座62楼"
         run: npm run order

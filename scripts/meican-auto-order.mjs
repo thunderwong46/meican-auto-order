@@ -8,6 +8,7 @@ const CONFIG = {
   password: mustEnv("MEICAN_PASSWORD"),
   defaultPickupLocation: process.env.DEFAULT_PICKUP_LOCATION || RULES.defaultPickupLocation || "汇金A座62楼",
   dryRun: (process.env.DRY_RUN || "false").toLowerCase() === "true",
+  notifyTestOnly: (process.env.NOTIFY_TEST_ONLY || "false").toLowerCase() === "true",
   targetDateOverride: process.env.TARGET_DATE || "",
   feishuWebhookUrl: process.env.FEISHU_WEBHOOK_URL || "",
   feishuSecret: process.env.FEISHU_SECRET || "",
@@ -36,6 +37,17 @@ main().catch(async (error) => {
 });
 
 async function main() {
+  if (CONFIG.notifyTestOnly) {
+    await notifySafely([
+      "美餐点餐完成",
+      "日期：2026-06-05",
+      "状态：飞书通知测试成功",
+      "餐品：这是一条测试消息，未实际点餐",
+    ].join("\n"));
+    console.log("Sent Feishu test notification only.");
+    return;
+  }
+
   const onlineDate = await getOnlineChinaDate();
   const orderPlans = buildOrderPlans(onlineDate);
 
@@ -509,17 +521,10 @@ async function sendFeishuText(text) {
 }
 
 function formatSuccessMessage(onlineDate, orderPlans, results) {
-  const lines = [
-    "美餐点餐完成",
-    `执行日期：${onlineDate.date} ${onlineDate.weekdayLabel}`,
-    `目标日期：${[...new Set(orderPlans.map((plan) => plan.targetDate))].join("、")}`,
-    CONFIG.dryRun ? "模式：预览，未实际下单" : "模式：已自动处理",
-    "",
-    "点餐结果：",
-  ];
+  const lines = [CONFIG.dryRun ? "点餐预览成功" : "点餐成功"];
 
   for (const result of results) {
-    lines.push(formatResultLine(result));
+    lines.push(`${result.meal}：${formatMealNotificationText(result)}`);
   }
 
   return lines.join("\n");
@@ -547,6 +552,18 @@ function formatResultLine(result) {
   if (result.reason) parts.push(`原因：${result.reason}`);
 
   return parts.join(" | ");
+}
+
+function formatMealNotificationText(result) {
+  if (result.dish) return result.dish;
+  if (result.reason) return result.reason;
+
+  return {
+    ORDERED: "已下单",
+    EXISTS: "已有订单",
+    DRY_RUN: "预览可点",
+    SKIPPED: "已跳过",
+  }[result.status] || result.status;
 }
 
 function formatShanghai(timestamp) {
