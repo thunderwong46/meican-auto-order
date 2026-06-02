@@ -39,7 +39,8 @@ main().catch(async (error) => {
 async function main() {
   if (CONFIG.notifyTestOnly) {
     await notifySafely([
-      "点餐成功",
+      `小王导，${formatChineseDate(CONFIG.targetDateOverride || "2026-06-05")}的三餐点好啦`,
+      "",
       "早餐：测试牛奶套餐",
       "午餐：测试鸡腿饭",
       "晚餐：测试蜂蜜鸡翅饭",
@@ -521,10 +522,12 @@ async function sendFeishuText(text) {
 }
 
 function formatSuccessMessage(onlineDate, orderPlans, results) {
-  const lines = [CONFIG.dryRun ? "点餐预览成功" : "点餐成功"];
+  const targetDate = orderPlans[0]?.targetDate || onlineDate.date;
+  const lines = [`小王导，${formatChineseDate(targetDate)}的三餐点好啦`, ""];
 
-  for (const result of results) {
-    lines.push(`${result.meal}：${formatMealNotificationText(result)}`);
+  for (const meal of ["早餐", "午餐", "晚餐"]) {
+    const result = results.find((item) => item.targetDate === targetDate && item.meal === meal) || results.find((item) => item.meal === meal);
+    lines.push(`${meal}：${result ? formatMealNotificationText(result) : "未找到"}`);
   }
 
   return lines.join("\n");
@@ -564,6 +567,11 @@ function formatMealNotificationText(result) {
     DRY_RUN: "预览可点",
     SKIPPED: "已跳过",
   }[result.status] || result.status;
+}
+
+function formatChineseDate(dateString) {
+  const [, month, day] = dateString.split("-").map(Number);
+  return `${month}月${day}日`;
 }
 
 function formatShanghai(timestamp) {
