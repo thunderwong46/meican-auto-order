@@ -1,0 +1,45 @@
+name: Meican Auto Order
+
+on:
+  schedule:
+    # GitHub Actions uses UTC. 04:05 UTC is 12:05 in China Standard Time.
+    - cron: "5 4 * * 1,2,3,4,6"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Preview only, do not submit orders"
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+      target_date:
+        description: "Optional target date, YYYY-MM-DD"
+        required: false
+        type: string
+
+jobs:
+  order:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Check script syntax
+        run: npm run check
+
+      - name: Order meals
+        env:
+          MEICAN_USERNAME: ${{ secrets.MEICAN_USERNAME }}
+          MEICAN_PASSWORD: ${{ secrets.MEICAN_PASSWORD }}
+          DRY_RUN: ${{ inputs.dry_run || 'false' }}
+          TARGET_DATE: ${{ inputs.target_date }}
+          DEFAULT_PICKUP_LOCATION: "汇金A座62楼"
+        run: npm run order

@@ -1,0 +1,27 @@
+{
+  "defaultPickupLocation": "汇金A座62楼",
+  "spicyWords": ["辣", "麻辣", "香辣", "酸辣", "劲辣", "剁椒"],
+  "meals": {
+    "breakfast": {
+      "budgetInCent": 800,
+      "requiredAny": ["牛奶", "豆浆"],
+      "forbiddenAny": ["鸡蛋", "水煮蛋", "卤蛋", "蛋"],
+      "forbiddenRestaurants": [],
+      "avoidSpicy": false
+    },
+    "lunch": {
+      "budgetInCent": null,
+      "requiredAny": [],
+      "forbiddenAny": [],
+      "forbiddenRestaurants": ["杨国福"],
+      "avoidSpicy": true
+    },
+    "dinner": {
+      "budgetInCent": 2000,
+      "requiredAny": [],
+      "forbiddenAny": [],
+      "forbiddenRestaurants": ["杨国福"],
+      "avoidSpicy": true
+    }
+  }
+}

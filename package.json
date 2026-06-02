@@ -1,0 +1,13 @@
+{
+  "name": "meican-auto-order",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "order": "node scripts/meican-auto-order.mjs",
+    "check": "node --check scripts/meican-auto-order.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
