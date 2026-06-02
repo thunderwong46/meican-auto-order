@@ -2,8 +2,8 @@ name: Meican Auto Order
 
 on:
   schedule:
-    # GitHub Actions uses UTC. 04:05 UTC is 12:05 in China Standard Time.
-    - cron: "5 4 * * 1,2,3,4,6"
+    # GitHub Actions uses UTC. 04:03 UTC is 12:03 in China Standard Time.
+    - cron: "3 4 * * 1,2,3,4,6"
   workflow_dispatch:
     inputs:
       dry_run:
