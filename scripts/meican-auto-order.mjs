@@ -39,10 +39,10 @@ main().catch(async (error) => {
 async function main() {
   if (CONFIG.notifyTestOnly) {
     await notifySafely([
-      "美餐点餐完成",
-      "日期：2026-06-05",
-      "状态：飞书通知测试成功",
-      "餐品：这是一条测试消息，未实际点餐",
+      "点餐成功",
+      "早餐：测试牛奶套餐",
+      "午餐：测试鸡腿饭",
+      "晚餐：测试蜂蜜鸡翅饭",
     ].join("\n"));
     console.log("Sent Feishu test notification only.");
     return;
