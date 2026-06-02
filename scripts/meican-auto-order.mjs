@@ -48,6 +48,11 @@ async function main() {
   }
 
   await login();
+  const usedDishNames = await getUsedDishNames(orderPlans);
+  if (usedDishNames.size) {
+    console.log(`Avoiding repeated workweek dishes: ${[...usedDishNames].join(", ")}`);
+  }
+
   const calendarItemsByDate = new Map();
   const results = [];
 
@@ -56,7 +61,7 @@ async function main() {
       calendarItemsByDate.set(plan.targetDate, await getCalendarItems(plan.targetDate));
     }
 
-    const result = await handleMealPlan(calendarItemsByDate.get(plan.targetDate), plan);
+    const result = await handleMealPlan(calendarItemsByDate.get(plan.targetDate), plan, usedDishNames);
     results.push(result);
   }
 
@@ -87,6 +92,46 @@ function buildOrderPlans(onlineDate) {
   if (!targetDate) return [];
 
   return [...buildRegularPlans(targetDate), ...buildExtraPlans(onlineDate)];
+}
+
+async function getUsedDishNames(orderPlans) {
+  if (!RULES.avoidRepeatedDishesInWorkweek) return new Set();
+
+  const weekRanges = uniqueWeekRanges(orderPlans.map((plan) => plan.targetDate));
+  const usedDishNames = new Set();
+
+  for (const range of weekRanges) {
+    const calendarItems = await getCalendarItems(range.beginDate, range.endDate, true);
+    for (const calendarItem of calendarItems) {
+      for (const dishName of extractDishNames(calendarItem)) {
+        usedDishNames.add(normalizeDishName(dishName));
+      }
+    }
+  }
+
+  return usedDishNames;
+}
+
+function uniqueWeekRanges(targetDates) {
+  const byBeginDate = new Map();
+  for (const targetDate of targetDates) {
+    const range = getWorkweekRange(targetDate);
+    byBeginDate.set(range.beginDate, range);
+  }
+  return [...byBeginDate.values()];
+}
+
+function getWorkweekRange(dateString) {
+  const [year, month, day] = dateString.split("-").map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day, 12));
+  const dayOfWeek = date.getUTCDay() || 7;
+  const monday = new Date(date.getTime() - (dayOfWeek - 1) * 24 * 60 * 60 * 1000);
+  const friday = new Date(monday.getTime() + 4 * 24 * 60 * 60 * 1000);
+
+  return {
+    beginDate: monday.toISOString().slice(0, 10),
+    endDate: friday.toISOString().slice(0, 10),
+  };
 }
 
 function buildRegularPlans(targetDate) {
@@ -219,18 +264,18 @@ async function login() {
   };
 }
 
-async function getCalendarItems(targetDate) {
+async function getCalendarItems(beginDate, endDate = beginDate, withOrderDetail = false) {
   const data = await api("calendarItems/list", {
     params: {
-      withOrderDetail: "false",
-      beginDate: targetDate,
-      endDate: targetDate,
+      withOrderDetail: String(withOrderDetail),
+      beginDate,
+      endDate,
     },
   });
-  return data?.dateList?.[0]?.calendarItemList || [];
+  return (data?.dateList || []).flatMap((dateItem) => dateItem.calendarItemList || []);
 }
 
-async function handleMealPlan(calendarItems, plan) {
+async function handleMealPlan(calendarItems, plan, usedDishNames) {
   const mealRule = plan.mealRule;
   const baseResult = {
     plan: plan.name,
@@ -251,10 +296,12 @@ async function handleMealPlan(calendarItems, plan) {
     return { ...baseResult, status: "SKIPPED", title: calendarItem.title, reason: calendarItem.status };
   }
 
-  const selected = await selectDish(calendarItem, mealRule);
+  const selected = await selectDish(calendarItem, mealRule, usedDishNames);
   if (!selected) {
     return { ...baseResult, status: "SKIPPED", title: calendarItem.title, reason: "No matching dish." };
   }
+
+  usedDishNames.add(normalizeDishName(selected.dish.name));
 
   const address = await getPickupAddress(calendarItem);
   if (!address) {
@@ -278,7 +325,7 @@ async function handleMealPlan(calendarItems, plan) {
   return { ...selectedResult, status: "ORDERED", orderUniqueId: order.order?.uniqueId };
 }
 
-async function selectDish(calendarItem, mealRule) {
+async function selectDish(calendarItem, mealRule, usedDishNames) {
   const targetTime = formatShanghai(calendarItem.targetTime);
   const restaurantsData = await api("restaurants/list", {
     params: {
@@ -304,6 +351,7 @@ async function selectDish(calendarItem, mealRule) {
     const matchingDishes = dishes.filter((candidate) => {
       if (candidate.available === false || candidate.soldOut) return false;
       if (mealRule.budgetInCent !== null && candidate.priceInCent > mealRule.budgetInCent) return false;
+      if (usedDishNames.has(normalizeDishName(candidate.name))) return false;
       return mealRule.dishAllowed(candidate);
     });
 
@@ -425,6 +473,49 @@ function formatShanghai(timestamp) {
 
 function isSpicy(text) {
   return hasAny(text, RULES.spicyWords || []);
+}
+
+function extractDishNames(value) {
+  const names = new Set();
+  collectDishNames(value, names, 0);
+  return [...names].filter(Boolean);
+}
+
+function collectDishNames(value, names, depth) {
+  if (!value || depth > 8) return;
+
+  if (Array.isArray(value)) {
+    for (const item of value) collectDishNames(item, names, depth + 1);
+    return;
+  }
+
+  if (typeof value !== "object") return;
+
+  const directName = value.dishName || value.dish?.name;
+  if (typeof directName === "string") names.add(directName);
+
+  if (typeof value.name === "string" && looksLikeDishObject(value)) {
+    names.add(value.name);
+  }
+
+  for (const [key, child] of Object.entries(value)) {
+    if (key === "restaurant" || key === "restaurantList" || key === "dishList") continue;
+    collectDishNames(child, names, depth + 1);
+  }
+}
+
+function looksLikeDishObject(value) {
+  return (
+    Object.hasOwn(value, "dishId") ||
+    Object.hasOwn(value, "dishUniqueId") ||
+    Object.hasOwn(value, "dishPrice") ||
+    Object.hasOwn(value, "priceInCent") ||
+    Object.hasOwn(value, "count")
+  );
+}
+
+function normalizeDishName(name) {
+  return String(name || "").replace(/\s+/g, "").trim();
 }
 
 function hasAny(text, words) {

@@ -22,6 +22,7 @@ The script first checks online Beijing time before ordering:
 - Lunch: no spicy dishes, no Yangguofu.
 - Dinner: max 20 RMB, no spicy dishes, no Yangguofu.
 - Extra Saturday lunch order: next Thursday lunch, restaurant must include `贪玩午市`, random dish.
+- Monday to Friday meals should not repeat dishes within the same workweek.
 - Pickup location: `汇金A座62楼`.
 - If a meal already has an order, the script keeps it.
 

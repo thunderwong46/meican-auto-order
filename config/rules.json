@@ -1,5 +1,6 @@
 {
   "defaultPickupLocation": "汇金A座62楼",
+  "avoidRepeatedDishesInWorkweek": true,
   "spicyWords": ["辣", "麻辣", "香辣", "酸辣", "劲辣", "剁椒"],
   "meals": {
     "breakfast": {
