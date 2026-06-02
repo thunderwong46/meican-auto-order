@@ -12,32 +12,17 @@ const CONFIG = {
   clientSecret: "vD11O6xI9bG3kqYRu9OyPAHkRGxLh4E",
 };
 
-const MEALS = [
-  {
-    key: "breakfast",
-    label: "早餐",
-    budgetInCent: mealConfig("breakfast").budgetInCent,
-    titlePattern: /早餐/,
-    dishAllowed: (dish) => dishAllowedByConfig(dish, mealConfig("breakfast")),
-    restaurantAllowed: (restaurant) => restaurantAllowedByConfig(restaurant, mealConfig("breakfast")),
-  },
-  {
-    key: "lunch",
-    label: "午餐",
-    budgetInCent: mealConfig("lunch").budgetInCent,
-    titlePattern: /午餐/,
-    dishAllowed: (dish) => dishAllowedByConfig(dish, mealConfig("lunch")),
-    restaurantAllowed: (restaurant) => restaurantAllowedByConfig(restaurant, mealConfig("lunch")),
-  },
-  {
-    key: "dinner",
-    label: "晚餐",
-    budgetInCent: mealConfig("dinner").budgetInCent,
-    titlePattern: /晚餐/,
-    dishAllowed: (dish) => dishAllowedByConfig(dish, mealConfig("dinner")),
-    restaurantAllowed: (restaurant) => restaurantAllowedByConfig(restaurant, mealConfig("dinner")),
-  },
-];
+const MEAL_LABELS = {
+  breakfast: "早餐",
+  lunch: "午餐",
+  dinner: "晚餐",
+};
+
+const MEAL_TITLE_PATTERNS = {
+  breakfast: /早餐/,
+  lunch: /午餐/,
+  dinner: /晚餐/,
+};
 
 let token = null;
 
@@ -48,77 +33,31 @@ main().catch((error) => {
 
 async function main() {
   const onlineDate = await getOnlineChinaDate();
-  const targetDate = CONFIG.targetDateOverride || getTargetDate(onlineDate);
+  const orderPlans = buildOrderPlans(onlineDate);
 
   console.log(`Online Beijing date: ${onlineDate.date} ${onlineDate.weekdayLabel}`);
 
-  if (!targetDate) {
+  if (!orderPlans.length) {
     console.log("Skip: today is not an ordering day.");
     return;
   }
 
-  console.log(`Target date: ${targetDate}`);
+  console.log(`Target dates: ${[...new Set(orderPlans.map((plan) => plan.targetDate))].join(", ")}`);
   if (CONFIG.dryRun) {
     console.log("Dry run: no orders will be submitted.");
   }
 
   await login();
-  const calendarItems = await getCalendarItems(targetDate);
+  const calendarItemsByDate = new Map();
   const results = [];
 
-  for (const mealRule of MEALS) {
-    const calendarItem = calendarItems.find((item) => mealRule.titlePattern.test(item.title || ""));
-    if (!calendarItem) {
-      results.push({ meal: mealRule.label, status: "SKIPPED", reason: "No meal calendar item found." });
-      continue;
+  for (const plan of orderPlans) {
+    if (!calendarItemsByDate.has(plan.targetDate)) {
+      calendarItemsByDate.set(plan.targetDate, await getCalendarItems(plan.targetDate));
     }
 
-    if (calendarItem.status === "ORDER") {
-      results.push({ meal: mealRule.label, status: "EXISTS", title: calendarItem.title });
-      continue;
-    }
-
-    if (calendarItem.status && calendarItem.status !== "AVAILABLE") {
-      results.push({ meal: mealRule.label, status: "SKIPPED", title: calendarItem.title, reason: calendarItem.status });
-      continue;
-    }
-
-    const selected = await selectDish(calendarItem, mealRule);
-    if (!selected) {
-      results.push({ meal: mealRule.label, status: "SKIPPED", title: calendarItem.title, reason: "No matching dish." });
-      continue;
-    }
-
-    const address = await getPickupAddress(calendarItem);
-    if (!address) {
-      results.push({ meal: mealRule.label, status: "SKIPPED", title: calendarItem.title, reason: "No pickup address found." });
-      continue;
-    }
-
-    if (CONFIG.dryRun) {
-      results.push({
-        meal: mealRule.label,
-        status: "DRY_RUN",
-        title: calendarItem.title,
-        restaurant: selected.restaurant.name,
-        dish: selected.dish.name,
-        price: money(selected.dish.priceInCent),
-        pickup: address.pickUpLocation,
-      });
-      continue;
-    }
-
-    const order = await addOrder(calendarItem, selected.dish, address);
-    results.push({
-      meal: mealRule.label,
-      status: "ORDERED",
-      title: calendarItem.title,
-      restaurant: selected.restaurant.name,
-      dish: selected.dish.name,
-      price: money(selected.dish.priceInCent),
-      pickup: address.pickUpLocation,
-      orderUniqueId: order.order?.uniqueId,
-    });
+    const result = await handleMealPlan(calendarItemsByDate.get(plan.targetDate), plan);
+    results.push(result);
   }
 
   console.log(JSON.stringify(results, null, 2));
@@ -139,6 +78,50 @@ function mealConfig(key) {
   return RULES.meals?.[key] || {};
 }
 
+function buildOrderPlans(onlineDate) {
+  if (CONFIG.targetDateOverride) {
+    return buildRegularPlans(CONFIG.targetDateOverride);
+  }
+
+  const targetDate = getTargetDate(onlineDate);
+  if (!targetDate) return [];
+
+  return [...buildRegularPlans(targetDate), ...buildExtraPlans(onlineDate)];
+}
+
+function buildRegularPlans(targetDate) {
+  return ["breakfast", "lunch", "dinner"].map((mealKey) => ({
+    name: "regular",
+    targetDate,
+    mealRule: buildMealRule(mealKey),
+  }));
+}
+
+function buildExtraPlans(onlineDate) {
+  return (RULES.extraOrders || [])
+    .filter((extraOrder) => extraOrder.weekday === onlineDate.weekday)
+    .map((extraOrder) => ({
+      name: extraOrder.name || "extra",
+      targetDate: addDays(onlineDate.date, extraOrder.targetOffsetDays),
+      mealRule: buildMealRule(extraOrder.meal, extraOrder),
+    }));
+}
+
+function buildMealRule(mealKey, overrides = {}) {
+  const config = { ...mealConfig(mealKey), ...(overrides.rules || {}) };
+  const label = MEAL_LABELS[mealKey] || mealKey;
+
+  return {
+    key: mealKey,
+    label,
+    budgetInCent: config.budgetInCent ?? null,
+    titlePattern: MEAL_TITLE_PATTERNS[mealKey] || new RegExp(label),
+    selectionMode: overrides.selectionMode || config.selectionMode || "first",
+    dishAllowed: (dish) => dishAllowedByConfig(dish, config),
+    restaurantAllowed: (restaurant) => restaurantAllowedByConfig(restaurant, config),
+  };
+}
+
 function dishAllowedByConfig(dish, config) {
   const text = dish.name || "";
   if (config.requiredAny?.length && !hasAny(text, config.requiredAny)) return false;
@@ -149,7 +132,9 @@ function dishAllowedByConfig(dish, config) {
 
 function restaurantAllowedByConfig(restaurant, config) {
   const forbidden = config.forbiddenRestaurants || [];
-  return !forbidden.some((name) => restaurant.name.includes(name));
+  if (forbidden.some((name) => restaurant.name.includes(name))) return false;
+  if (config.requiredRestaurants?.length && !config.requiredRestaurants.some((name) => restaurant.name.includes(name))) return false;
+  return true;
 }
 
 async function getOnlineChinaDate() {
@@ -196,6 +181,12 @@ function getTargetDate(onlineDate) {
   return target.toISOString().slice(0, 10);
 }
 
+function addDays(dateString, days) {
+  const [year, month, day] = dateString.split("-").map(Number);
+  const utcNoon = Date.UTC(year, month - 1, day, 12);
+  return new Date(utcNoon + days * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+}
+
 function weekdayLabel(shortName) {
   return {
     Mon: "星期一",
@@ -239,6 +230,54 @@ async function getCalendarItems(targetDate) {
   return data?.dateList?.[0]?.calendarItemList || [];
 }
 
+async function handleMealPlan(calendarItems, plan) {
+  const mealRule = plan.mealRule;
+  const baseResult = {
+    plan: plan.name,
+    targetDate: plan.targetDate,
+    meal: mealRule.label,
+  };
+
+  const calendarItem = calendarItems.find((item) => mealRule.titlePattern.test(item.title || ""));
+  if (!calendarItem) {
+    return { ...baseResult, status: "SKIPPED", reason: "No meal calendar item found." };
+  }
+
+  if (calendarItem.status === "ORDER") {
+    return { ...baseResult, status: "EXISTS", title: calendarItem.title };
+  }
+
+  if (calendarItem.status && calendarItem.status !== "AVAILABLE") {
+    return { ...baseResult, status: "SKIPPED", title: calendarItem.title, reason: calendarItem.status };
+  }
+
+  const selected = await selectDish(calendarItem, mealRule);
+  if (!selected) {
+    return { ...baseResult, status: "SKIPPED", title: calendarItem.title, reason: "No matching dish." };
+  }
+
+  const address = await getPickupAddress(calendarItem);
+  if (!address) {
+    return { ...baseResult, status: "SKIPPED", title: calendarItem.title, reason: "No pickup address found." };
+  }
+
+  const selectedResult = {
+    ...baseResult,
+    title: calendarItem.title,
+    restaurant: selected.restaurant.name,
+    dish: selected.dish.name,
+    price: money(selected.dish.priceInCent),
+    pickup: address.pickUpLocation,
+  };
+
+  if (CONFIG.dryRun) {
+    return { ...selectedResult, status: "DRY_RUN" };
+  }
+
+  const order = await addOrder(calendarItem, selected.dish, address);
+  return { ...selectedResult, status: "ORDERED", orderUniqueId: order.order?.uniqueId };
+}
+
 async function selectDish(calendarItem, mealRule) {
   const targetTime = formatShanghai(calendarItem.targetTime);
   const restaurantsData = await api("restaurants/list", {
@@ -248,6 +287,7 @@ async function selectDish(calendarItem, mealRule) {
     },
   });
   const restaurants = restaurantsData.restaurantList || [];
+  const candidates = [];
 
   for (const restaurant of restaurants) {
     if (!restaurant.open || !mealRule.restaurantAllowed(restaurant)) continue;
@@ -261,16 +301,21 @@ async function selectDish(calendarItem, mealRule) {
     });
 
     const dishes = (detail.dishList || []).filter((dish) => !dish.isSection);
-    const dish = dishes.find((candidate) => {
+    const matchingDishes = dishes.filter((candidate) => {
       if (candidate.available === false || candidate.soldOut) return false;
       if (mealRule.budgetInCent !== null && candidate.priceInCent > mealRule.budgetInCent) return false;
       return mealRule.dishAllowed(candidate);
     });
 
-    if (dish) return { restaurant, dish };
+    if (mealRule.selectionMode !== "random" && matchingDishes.length) {
+      return { restaurant, dish: matchingDishes[0] };
+    }
+
+    candidates.push(...matchingDishes.map((dish) => ({ restaurant, dish })));
   }
 
-  return null;
+  if (!candidates.length) return null;
+  return candidates[Math.floor(Math.random() * candidates.length)];
 }
 
 async function getPickupAddress(calendarItem) {

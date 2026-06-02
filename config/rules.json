@@ -23,5 +23,19 @@
       "forbiddenRestaurants": ["杨国福"],
       "avoidSpicy": true
     }
-  }
+  },
+  "extraOrders": [
+    {
+      "name": "saturday-next-thursday-lunch",
+      "weekday": "Sat",
+      "targetOffsetDays": 5,
+      "meal": "lunch",
+      "selectionMode": "random",
+      "rules": {
+        "requiredRestaurants": ["贪玩午市"],
+        "forbiddenRestaurants": [],
+        "avoidSpicy": false
+      }
+    }
+  ]
 }
