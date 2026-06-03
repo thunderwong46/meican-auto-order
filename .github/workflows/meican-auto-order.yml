@@ -1,11 +1,6 @@
 name: Meican Auto Order
 
 on:
-  schedule:
-    # Temporary one-off run: 06:00 UTC is 14:00 in China Standard Time on 2026-06-03.
-    - cron: "0 6 3 6 *"
-    # GitHub Actions uses UTC. 04:03 UTC is 12:03 in China Standard Time.
-    - cron: "3 4 * * 1,2,3,4,6"
   workflow_dispatch:
     inputs:
       dry_run:
@@ -47,16 +42,7 @@ jobs:
       - name: Check script syntax
         run: npm run check
 
-      - name: Guard temporary 14:00 run
-        if: github.event_name == 'schedule' && github.event.schedule == '0 6 3 6 *'
-        run: |
-          if [ "$(date -u +%F)" != "2026-06-03" ]; then
-            echo "Temporary 14:00 CST run is only valid on 2026-06-03."
-            echo "SKIP_ORDER=true" >> "$GITHUB_ENV"
-          fi
-
       - name: Order meals
-        if: env.SKIP_ORDER != 'true'
         env:
           MEICAN_USERNAME: ${{ secrets.MEICAN_USERNAME }}
           MEICAN_PASSWORD: ${{ secrets.MEICAN_PASSWORD }}
