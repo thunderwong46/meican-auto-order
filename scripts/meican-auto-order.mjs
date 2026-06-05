@@ -69,6 +69,10 @@ async function main() {
   if (usedDishNames.size) {
     console.log(`Avoiding repeated workweek dishes: ${[...usedDishNames].join(", ")}`);
   }
+  const weeklyRestaurantCounts = await getWeeklyRestaurantCounts(orderPlans);
+  if (weeklyRestaurantCounts.size) {
+    console.log(`Existing workweek restaurant counts: ${formatRestaurantCounts(weeklyRestaurantCounts)}`);
+  }
 
   const calendarItemsByDate = new Map();
   const results = [];
@@ -78,7 +82,7 @@ async function main() {
       calendarItemsByDate.set(plan.targetDate, await getCalendarItems(plan.targetDate, plan.targetDate, true));
     }
 
-    const result = await handleMealPlan(calendarItemsByDate.get(plan.targetDate), plan, usedDishNames);
+    const result = await handleMealPlan(calendarItemsByDate.get(plan.targetDate), plan, usedDishNames, weeklyRestaurantCounts);
     results.push(result);
   }
 
@@ -139,6 +143,24 @@ function uniqueWeekRanges(targetDates) {
   return [...byBeginDate.values()];
 }
 
+async function getWeeklyRestaurantCounts(orderPlans) {
+  if (!RULES.weeklyRestaurantMinimums?.length) return new Map();
+
+  const weekRanges = uniqueWeekRanges(orderPlans.map((plan) => plan.targetDate));
+  const counts = new Map();
+
+  for (const range of weekRanges) {
+    const calendarItems = await getCalendarItems(range.beginDate, range.endDate, true);
+    for (const calendarItem of calendarItems) {
+      for (const restaurantName of extractRestaurantNames(calendarItem)) {
+        addWeeklyRestaurantCount(counts, range.beginDate, restaurantName);
+      }
+    }
+  }
+
+  return counts;
+}
+
 function getWorkweekRange(dateString) {
   const [year, month, day] = dateString.split("-").map(Number);
   const date = new Date(Date.UTC(year, month - 1, day, 12));
@@ -183,6 +205,48 @@ function buildMealRule(mealKey, overrides = {}) {
     dishAllowed: (dish) => dishAllowedByConfig(dish, config),
     restaurantAllowed: (restaurant) => restaurantAllowedByConfig(restaurant, config),
   };
+}
+
+function getWeeklyRestaurantNeed(targetDate, restaurantCounts) {
+  const range = getWorkweekRange(targetDate);
+  return (RULES.weeklyRestaurantMinimums || []).find((rule) => {
+    const current = getWeeklyRestaurantCount(restaurantCounts, range.beginDate, rule.name);
+    if (current >= rule.min) return false;
+    return targetDate >= getWeeklyRestaurantTargetDate(rule, range);
+  }) || null;
+}
+
+function getWeeklyRestaurantTargetDate(rule, range) {
+  const offset = stableOffset(`${range.beginDate}:${rule.name}`, 5);
+  return addDays(range.beginDate, offset);
+}
+
+function getWeeklyRestaurantCount(restaurantCounts, weekBeginDate, restaurantName) {
+  return restaurantCounts.get(weeklyRestaurantKey(weekBeginDate, restaurantName)) || 0;
+}
+
+function addWeeklyRestaurantCount(restaurantCounts, weekBeginDate, restaurantName) {
+  for (const rule of RULES.weeklyRestaurantMinimums || []) {
+    if (!restaurantName.includes(rule.name)) continue;
+    const key = weeklyRestaurantKey(weekBeginDate, rule.name);
+    restaurantCounts.set(key, (restaurantCounts.get(key) || 0) + 1);
+  }
+}
+
+function weeklyRestaurantKey(weekBeginDate, restaurantName) {
+  return `${weekBeginDate}:${restaurantName}`;
+}
+
+function formatRestaurantCounts(restaurantCounts) {
+  return [...restaurantCounts.entries()].map(([key, count]) => `${key}=${count}`).join(", ");
+}
+
+function stableOffset(text, modulo) {
+  let hash = 0;
+  for (const char of text) {
+    hash = (hash * 31 + char.charCodeAt(0)) >>> 0;
+  }
+  return hash % modulo;
 }
 
 function dishAllowedByConfig(dish, config) {
@@ -293,7 +357,7 @@ async function getCalendarItems(beginDate, endDate = beginDate, withOrderDetail 
   return (data?.dateList || []).flatMap((dateItem) => dateItem.calendarItemList || []);
 }
 
-async function handleMealPlan(calendarItems, plan, usedDishNames) {
+async function handleMealPlan(calendarItems, plan, usedDishNames, weeklyRestaurantCounts) {
   const mealRule = plan.mealRule;
   const baseResult = {
     plan: plan.name,
@@ -320,12 +384,13 @@ async function handleMealPlan(calendarItems, plan, usedDishNames) {
     return { ...baseResult, status: "SKIPPED", title: calendarItem.title, reason: calendarItem.status };
   }
 
-  const selected = await selectDish(calendarItem, mealRule, usedDishNames);
+  const selected = await selectDish(calendarItem, plan.targetDate, mealRule, usedDishNames, weeklyRestaurantCounts);
   if (!selected) {
     return { ...baseResult, status: "SKIPPED", title: calendarItem.title, reason: "No matching dish." };
   }
 
   usedDishNames.add(normalizeDishName(selected.dish.name));
+  addWeeklyRestaurantCount(weeklyRestaurantCounts, getWorkweekRange(plan.targetDate).beginDate, selected.restaurant.name);
 
   const address = await getPickupAddress(calendarItem);
   if (!address) {
@@ -349,7 +414,7 @@ async function handleMealPlan(calendarItems, plan, usedDishNames) {
   return { ...selectedResult, status: "ORDERED", orderUniqueId: order.order?.uniqueId };
 }
 
-async function selectDish(calendarItem, mealRule, usedDishNames) {
+async function selectDish(calendarItem, targetDate, mealRule, usedDishNames, weeklyRestaurantCounts) {
   const targetTime = formatShanghai(calendarItem.targetTime);
   const restaurantsData = await api("restaurants/list", {
     params: {
@@ -358,7 +423,8 @@ async function selectDish(calendarItem, mealRule, usedDishNames) {
     },
   });
   const restaurants = restaurantsData.restaurantList || [];
-  const candidates = [];
+  const fallbackCandidates = [];
+  const weeklyRestaurantNeed = getWeeklyRestaurantNeed(targetDate, weeklyRestaurantCounts);
 
   for (const restaurant of restaurants) {
     if (!restaurant.open || !mealRule.restaurantAllowed(restaurant)) continue;
@@ -379,14 +445,25 @@ async function selectDish(calendarItem, mealRule, usedDishNames) {
       return mealRule.dishAllowed(candidate);
     });
 
-    if (mealRule.selectionMode !== "random" && matchingDishes.length) {
+    const matchesWeeklyNeed = weeklyRestaurantNeed && restaurant.name.includes(weeklyRestaurantNeed.name);
+
+    if (matchesWeeklyNeed && matchingDishes.length) {
+      return chooseDishCandidate(matchingDishes.map((dish) => ({ restaurant, dish })), mealRule.selectionMode);
+    }
+
+    if (!weeklyRestaurantNeed && mealRule.selectionMode !== "random" && matchingDishes.length) {
       return { restaurant, dish: matchingDishes[0] };
     }
 
-    candidates.push(...matchingDishes.map((dish) => ({ restaurant, dish })));
+    fallbackCandidates.push(...matchingDishes.map((dish) => ({ restaurant, dish })));
   }
 
+  return chooseDishCandidate(fallbackCandidates, mealRule.selectionMode);
+}
+
+function chooseDishCandidate(candidates, selectionMode) {
   if (!candidates.length) return null;
+  if (selectionMode !== "random") return candidates[0];
   return candidates[Math.floor(Math.random() * candidates.length)];
 }
 
@@ -601,6 +678,12 @@ function extractDishNames(value) {
   return [...names].filter(Boolean);
 }
 
+function extractRestaurantNames(value) {
+  const names = new Set();
+  collectRestaurantNames(value, names, 0);
+  return [...names].filter(Boolean);
+}
+
 function collectDishNames(value, names, depth) {
   if (!value || depth > 8) return;
 
@@ -631,6 +714,38 @@ function looksLikeDishObject(value) {
     Object.hasOwn(value, "dishPrice") ||
     Object.hasOwn(value, "priceInCent") ||
     Object.hasOwn(value, "count")
+  );
+}
+
+function collectRestaurantNames(value, names, depth) {
+  if (!value || depth > 8) return;
+
+  if (Array.isArray(value)) {
+    for (const item of value) collectRestaurantNames(item, names, depth + 1);
+    return;
+  }
+
+  if (typeof value !== "object") return;
+
+  const directName = value.restaurantName || value.restaurant?.name || value.restaurant?.restaurantName;
+  if (typeof directName === "string") names.add(directName);
+
+  if (typeof value.name === "string" && looksLikeRestaurantObject(value)) {
+    names.add(value.name);
+  }
+
+  for (const [key, child] of Object.entries(value)) {
+    if (key === "dish" || key === "dishList" || key === "restaurantList") continue;
+    collectRestaurantNames(child, names, depth + 1);
+  }
+}
+
+function looksLikeRestaurantObject(value) {
+  return (
+    Object.hasOwn(value, "restaurantUniqueId") ||
+    Object.hasOwn(value, "restaurantId") ||
+    Object.hasOwn(value, "corpRestaurantId") ||
+    Object.hasOwn(value, "restaurantStatus")
   );
 }
 
