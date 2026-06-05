@@ -1,6 +1,12 @@
 {
   "defaultPickupLocation": "汇金A座62楼",
   "avoidRepeatedDishesInWorkweek": true,
+  "weeklyRestaurantMinimums": [
+    {
+      "name": "岭南印象",
+      "min": 1
+    }
+  ],
   "spicyWords": ["辣", "麻辣", "香辣", "酸辣", "劲辣", "剁椒"],
   "meals": {
     "breakfast": {
@@ -14,14 +20,14 @@
       "budgetInCent": null,
       "requiredAny": [],
       "forbiddenAny": [],
-      "forbiddenRestaurants": ["杨国福"],
+      "forbiddenRestaurants": ["杨国福", "顶厨秀"],
       "avoidSpicy": true
     },
     "dinner": {
       "budgetInCent": 2000,
       "requiredAny": [],
       "forbiddenAny": [],
-      "forbiddenRestaurants": ["杨国福"],
+      "forbiddenRestaurants": ["杨国福", "顶厨秀"],
       "avoidSpicy": true
     }
   },
